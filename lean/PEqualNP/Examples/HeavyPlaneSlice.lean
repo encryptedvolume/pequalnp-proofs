@@ -44,4 +44,22 @@ theorem weightNineSuffices (gates : List Gate) (out : Fin 13 → ℕ)
     simp only [Finset.card_compl, Fintype.card_fin, lineSize] at bound
     exact hNine w x (by omega)
 
+
+-- The thirteen line complements account for every possible false positive, even on light inputs.
+theorem outputTrueHitsLine (gates : List Gate) (out : Fin 13 → ℕ)
+    (hMono : ∀ g ∈ gates, g.op = GateOp.and ∨ g.op = GateOp.or)
+    (hOff : ∀ w, Circuit.eval ⟨gates, out w⟩
+      (List.ofFn (fun i : Fin 13 => decide (i ∉ line w))) = false) :
+    ∀ w (x : Fin 13 → Bool), Circuit.eval ⟨gates, out w⟩ (List.ofFn x) = true →
+      ∃ i ∈ line w, x i = true := by
+  intro w x hx
+  by_contra h
+  have leOff (i) (hi : x i = true) : decide (i ∉ line w) = true :=
+    decide_eq_true (fun hiL => h ⟨i, hiL, hi⟩)
+  have hoffTrue : Circuit.eval ⟨gates, out w⟩
+      (List.ofFn (fun i : Fin 13 => decide (i ∉ line w))) = true :=
+    PEqualNP.Outside.L_meta_1018.W_mono gates hMono (out w) x _ leOff hx
+  rw [hOff w] at hoffTrue
+  contradiction
+
 end HeavySlice
