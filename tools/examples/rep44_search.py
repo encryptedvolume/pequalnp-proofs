@@ -36,6 +36,43 @@ def verify(target, budget, gates, output):
     assert (values[output] if 0 <= output < len(values) else 0) == target
 
 
+def separation_test(target):
+    positive_rows = [row for row in range(16) if target >> row & 1]
+    negative_rows = [row for row in range(16) if not (target >> row & 1)]
+    comparisons = [(p, n) for p in positive_rows for n in negative_rows]
+    required = (1 << len(comparisons)) - 1
+
+    @lru_cache(None)
+    def distinguished(wire):
+        return sum(
+            1 << index
+            for index, (positive, negative) in enumerate(comparisons)
+            if wire >> positive & 1 and not (wire >> negative & 1)
+        )
+
+    def separates(state):
+        mask = 0
+        for wire in state:
+            mask |= distinguished(wire)
+        return mask == required
+
+    return separates
+
+
+def successors(state, remaining, separates):
+    pool = set(state)
+    for a, b in combinations(state, 2):
+        untouched = pool - {a, b}
+        for op, c in (("or", a | b), ("and", a & b)):
+            if c in pool or c in (0, FULL):
+                continue
+            for kept in ((), (a,), (b,), (a, b)):
+                nxt = untouched.union(kept, (c,))
+                if len(nxt) > remaining or not separates(nxt):
+                    continue
+                yield (op, a, b, c), tuple(sorted(nxt))
+
+
 def search(target, budget, keep_states=False):
     if not 0 <= target <= FULL or budget < 0:
         raise ValueError("use a 16-bit graph mask and a nonnegative gate budget")
@@ -54,20 +91,7 @@ def search(target, budget, keep_states=False):
     if target == FULL:
         return report([("and", [])], 8) if budget >= 1 else report()
 
-    comparisons = [(p,n) for p in range(16) if target >> p & 1
-                   for n in range(16) if not (target >> n & 1)]
-    required = (1 << len(comparisons)) - 1
-
-    @lru_cache(None)
-    def distinguished(wire):
-        return sum(1 << i for i,(p,n) in enumerate(comparisons)
-                   if wire >> p & 1 and not (wire >> n & 1))
-
-    def separates(state):
-        mask = 0
-        for wire in state:
-            mask |= distinguished(wire)
-        return mask == required
+    separates = separation_test(target)
 
     @lru_cache(None)
     def finish(remaining, state):
@@ -77,29 +101,20 @@ def search(target, budget, keep_states=False):
             return ()
         if remaining == 0:
             return None
-        pool = set(state)
-        for a, b in combinations(state, 2):
-            untouched = pool - {a,b}
-            for op, c in (("or", a|b), ("and", a&b)):
-                if c in pool or c in (0,FULL):
-                    continue
-                for kept in ((), (a,), (b,), (a,b)):
-                    nxt = untouched.union(kept, (c,))
-                    if len(nxt) > remaining or not separates(nxt):
-                        continue
-                    tail = finish(remaining-1, tuple(sorted(nxt)))
-                    if tail is not None:
-                        return ((op,a,b,c),) + tail
+        for step, nxt in successors(state, remaining, separates):
+            tail = finish(remaining - 1, nxt)
+            if tail is not None:
+                return (step,) + tail
         return None
 
-    for size in range(1, min(8, budget+1)+1):
+    for size in range(1, min(8, budget + 1) + 1):
         for root in combinations(sorted(PINS), size):
             if not separates(root):
                 continue
             path = finish(budget, root)
             if path is None:
                 continue
-            wires = {mask:i for i,mask in enumerate(PINS)}
+            wires = {mask: i for i, mask in enumerate(PINS)}
             gates = []
             for op, a, b, c in path:
                 gates.append((op, [wires[a], wires[b]]))
